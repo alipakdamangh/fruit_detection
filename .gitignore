@@ -1,0 +1,5 @@
+.venv/
+dataset/
+yolov8_models/
+
+best_model.pth
