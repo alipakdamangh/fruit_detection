@@ -1,6 +1,4 @@
 1.Install python 3.12.0, cudatoolkit 12.2.2, cuDNN 9.9.0:
-"https://www.python.org/downloads/release/python-3120"
-
 
 2.Verify installation with
 "python --version"  
@@ -23,7 +21,8 @@
 
 
 7.Install the pytorch version with gpu support first so that ultralytics won't install a conflicting package:
-"pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121"
+pip3 install --default-timeout=1000 torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
 "If the download fails try clearing the pip cache and the already installed torch libs and try downloading again:
 "pip uninstall torch torchvision torchaudio" => just in case they are installed
 "pip cache purge"

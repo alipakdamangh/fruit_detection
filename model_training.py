@@ -1,8 +1,9 @@
+# --- Import Required Libraries ---
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torchvision import datasets, transforms, models
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader
 import os
 import numpy as np
 from sklearn.metrics import confusion_matrix, classification_report
@@ -11,80 +12,78 @@ import seaborn as sns
 import copy
 import time
 
-# --- Configuration ---
-DATA_DIR = 'dataset' # Replace with the actual path to your dataset folder
-MODEL_SAVE_PATH = 'best_model.pth'
-NUM_CLASSES = 4 # freshapples, freshoranges, rottenapples, rottenoranges
-BATCH_SIZE = 32
-NUM_EPOCHS = 100 # Set a reasonably high number, early stopping will stop it
-LEARNING_RATE = 0.001
-PATIENCE = 10 # Number of epochs to wait for validation loss improvement before stopping
-CHECKPOINT_INTERVAL = 5 # Save checkpoint every N epochs (optional)
-WEIGHT_DECAY = 1e-5 # L2 regularization to help prevent overfitting
-NUM_WORKERS = 4 # Number of subprocesses for data loading. Set to 0 if you still have issues.
+# --- Configuration Parameters ---
+DATA_DIR = 'dataset'  # Base directory containing 'train', 'val', and 'test' folders
+MODEL_SAVE_PATH = 'best_model.pth'  # Path to save the best model
+NUM_CLASSES = 4  # Number of output classes: freshapples, freshoranges, rottenapples, rottenoranges
+BATCH_SIZE = 32  # Number of samples per batch
+NUM_EPOCHS = 100  # Max number of training epochs
+LEARNING_RATE = 0.001  # Initial learning rate
+PATIENCE = 10  # Patience for early stopping based on validation loss
+CHECKPOINT_INTERVAL = 5  # (Optional) Save model checkpoint every N epochs
+WEIGHT_DECAY = 1e-5  # L2 regularization (to reduce overfitting)
+NUM_WORKERS = 4  # Subprocesses for data loading (set to 0 on Windows if issues)
 
 # --- Device Configuration ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-# --- Data Transformations ---
-# We'll use standard ImageNet normalization as we're using a pre-trained ImageNet model
-# Mean and standard deviation values for ImageNet
+# --- Image Preprocessing: Normalization and Augmentation ---
+# Mean and std values are for ImageNet (as ResNet-50 is pre-trained on it)
 imagenet_mean = [0.485, 0.456, 0.406]
 imagenet_std = [0.229, 0.224, 0.225]
 
-# Training transforms with augmentation
+# Augmentation and normalization for training
 train_transforms = transforms.Compose([
-    transforms.RandomResizedCrop(224), # Random crop and resize
-    transforms.RandomHorizontalFlip(), # Random horizontal flip
-    transforms.RandomRotation(10), # Random rotation up to 10 degrees
-    transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1), # Minor color jitter
+    transforms.RandomResizedCrop(224),
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomRotation(10),
+    transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
     transforms.ToTensor(),
-    transforms.Normalize(imagenet_mean, imagenet_std) # Normalize
+    transforms.Normalize(imagenet_mean, imagenet_std)
 ])
 
-# Validation and Test transforms (no aggressive augmentation)
+# Less aggressive transforms for validation and testing
 val_test_transforms = transforms.Compose([
-    transforms.Resize(256), # Resize to 256
-    transforms.CenterCrop(224), # Crop to 224x224
+    transforms.Resize(256),
+    transforms.CenterCrop(224),
     transforms.ToTensor(),
-    transforms.Normalize(imagenet_mean, imagenet_std) # Normalize
+    transforms.Normalize(imagenet_mean, imagenet_std)
 ])
 
-# --- Load Data ---
+# --- Data Loading Function ---
 def load_data(data_dir, train_transforms, val_test_transforms, batch_size, num_workers, num_classes):
     print("Loading datasets...")
     try:
+        # Use torchvision.datasets.ImageFolder to load datasets
         image_datasets = {
             'train': datasets.ImageFolder(os.path.join(data_dir, 'train'), train_transforms),
             'val': datasets.ImageFolder(os.path.join(data_dir, 'val'), val_test_transforms),
             'test': datasets.ImageFolder(os.path.join(data_dir, 'test'), val_test_transforms)
         }
 
-        # Check class names and mapping
         class_names = image_datasets['train'].classes
         print(f"Found class names: {class_names}")
+
+        # Warn and auto-correct if actual class count differs
         if len(class_names) != num_classes:
-             print(f"Warning: Found {len(class_names)} classes, expected {num_classes}. Adjusting NUM_CLASSES.")
-             num_classes = len(class_names) # Adjust NUM_CLASSES if necessary
+            print(f"Warning: Expected {num_classes} classes, but found {len(class_names)}. Adjusting.")
+            num_classes = len(class_names)
 
-
-        # --- Check for and Handle Data Imbalance ---
+        # --- Check Data Imbalance ---
         print("Checking for data imbalance...")
         train_targets = image_datasets['train'].targets
         class_counts = np.bincount(train_targets)
         print(f"Class counts in training set: {dict(zip(class_names, class_counts))}")
 
-        total_samples = len(train_targets)
         if np.min(class_counts) == 0:
-             print("FATAL ERROR: One or more classes have zero training samples!")
-             exit() # Cannot train if a class has no data
+            print("FATAL ERROR: One or more classes have zero training samples!")
+            exit()
 
-        # Calculate class weights inversely proportional to class frequencies
+        # Calculate inverse class frequencies for weighted loss
         class_weights = 1. / torch.tensor(class_counts, dtype=torch.float32)
-        # weights = class_weights[train_targets] # Not used with weighted loss, but kept for reference if using WeightedRandomSampler
 
-        # DataLoaders
+        # Create DataLoaders
         dataloaders = {
             'train': DataLoader(image_datasets['train'], batch_size=batch_size, shuffle=True, num_workers=num_workers),
             'val': DataLoader(image_datasets['val'], batch_size=batch_size, shuffle=False, num_workers=num_workers),
@@ -95,76 +94,62 @@ def load_data(data_dir, train_transforms, val_test_transforms, batch_size, num_w
 
     except FileNotFoundError:
         print(f"FATAL ERROR: Data directory not found at {data_dir}")
-        print("Please check the DATA_DIR path configuration.")
         exit()
     except Exception as e:
         print(f"FATAL ERROR during data loading: {e}")
         exit()
 
-# --- Model Setup ---
+# --- Model Setup Function ---
 def setup_model(num_classes, device):
     print("Setting up model...")
-    # Load a pre-trained ResNet-50 model
-    model = models.resnet50(weights='ResNet50_Weights.DEFAULT') # Use weights=None for no pre-training
+    # Load ResNet-50 pre-trained on ImageNet
+    model = models.resnet50(weights='ResNet50_Weights.DEFAULT')
 
-    # Freeze all layers in the pre-trained model initially
+    # Freeze all layers
     for param in model.parameters():
         param.requires_grad = False
 
-    # Replace the final fully connected layer to match the number of classes
+    # Replace final classification layer
     num_ftrs = model.fc.in_features
     model.fc = nn.Linear(num_ftrs, num_classes)
 
+    # Move model to GPU if available
     model = model.to(device)
     print("Model loaded and modified.")
     return model
 
-# --- Training and Validation Function ---
+# --- Training Function with Early Stopping ---
 def train_model(model, criterion, optimizer, scheduler, dataloaders, num_epochs, patience, model_save_path, device):
     since = time.time()
-
     best_model_wts = copy.deepcopy(model.state_dict())
     best_loss = float('inf')
-    epochs_no_improve = 0 # Counter for early stopping
-
+    epochs_no_improve = 0
     history = {'train_loss': [], 'val_loss': [], 'val_accuracy': []}
 
     for epoch in range(num_epochs):
-        print(f'Epoch {epoch}/{num_epochs - 1}')
-        print('-' * 10)
+        print(f'Epoch {epoch}/{num_epochs - 1}\n' + '-' * 10)
 
-        # Each epoch has a training and validation phase
         for phase in ['train', 'val']:
-            if phase == 'train':
-                model.train()  # Set model to training mode
-            else:
-                model.eval()   # Set model to evaluate mode
+            model.train() if phase == 'train' else model.eval()
 
             running_loss = 0.0
             running_corrects = 0
             total_samples_phase = 0
 
-            # Iterate over data.
             for inputs, labels in dataloaders[phase]:
                 inputs = inputs.to(device)
                 labels = labels.to(device)
-
-                # zero the parameter gradients
                 optimizer.zero_grad()
 
-                # forward
-                # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
                     outputs = model(inputs)
                     _, preds = torch.max(outputs, 1)
                     loss = criterion(outputs, labels)
 
-                    # backward + optimize only if in training phase
                     if phase == 'train':
                         loss.backward()
                         optimizer.step()
 
-                # statistics
                 running_loss += loss.item() * inputs.size(0)
                 running_corrects += torch.sum(preds == labels.data)
                 total_samples_phase += inputs.size(0)
@@ -174,13 +159,7 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, num_epochs,
 
             history[f'{phase}_loss'].append(epoch_loss)
             if phase == 'val':
-                 history[f'{phase}_accuracy'].append(epoch_acc.item())
-
-
-            print(f'{phase} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}')
-
-            # Step the scheduler based on validation loss
-            if phase == 'val':
+                history['val_accuracy'].append(epoch_acc.item())
                 scheduler.step(epoch_loss)
 
                 # Early stopping logic
@@ -188,47 +167,28 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, num_epochs,
                     best_loss = epoch_loss
                     best_model_wts = copy.deepcopy(model.state_dict())
                     epochs_no_improve = 0
-                    print(f"Validation loss improved. Saving best model weights to {model_save_path}")
+                    print(f"Validation loss improved. Saving model to {model_save_path}")
                     torch.save(best_model_wts, model_save_path)
                 else:
                     epochs_no_improve += 1
-                    print(f"Validation loss did not improve for {epochs_no_improve} epoch(s).")
+                    print(f"No improvement for {epochs_no_improve} epoch(s).")
                     if epochs_no_improve >= patience:
-                        print(f"Early stopping triggered after {epoch + 1} epochs.")
-                        time_elapsed = time.time() - since
-                        print(f'Training complete in {time_elapsed // 60:.0f}m {time_elapsed % 60:.0f}s')
-                        # Load best model weights before returning
+                        print(f"Early stopping after {epoch + 1} epochs.")
                         model.load_state_dict(best_model_wts)
-                        return model, history # Stop training
+                        return model, history
 
-        # Optional: Save checkpoint periodically
-        # if (epoch + 1) % CHECKPOINT_INTERVAL == 0:
-        #     checkpoint_path = f'checkpoint_epoch_{epoch+1}.pth'
-        #     torch.save({
-        #         'epoch': epoch,
-        #         'model_state_dict': model.state_dict(),
-        #         'optimizer_state_dict': optimizer.state_dict(),
-        #         'scheduler_state_dict': scheduler.state_dict(),
-        #         'best_loss': best_loss,
-        #         'epochs_no_improve': epochs_no_improve,
-        #         'history': history
-        #     }, checkpoint_path)
-        #     print(f"Checkpoint saved to {checkpoint_path}")
-
-
-        print() # Newline after each epoch
+            print(f'{phase} Loss: {epoch_loss:.4f} Acc: {epoch_acc:.4f}\n')
 
     time_elapsed = time.time() - since
     print(f'Training complete in {time_elapsed // 60:.0f}m {time_elapsed % 60:.0f}s')
-    print(f'Best val loss: {best_loss:4f}')
-
-    # load best model weights
     model.load_state_dict(best_model_wts)
     return model, history
 
-# --- Plot Training History ---
+# --- Plot Training and Validation Curves ---
 def plot_history(history):
     plt.figure(figsize=(12, 4))
+
+    # Plot training and validation loss
     plt.subplot(1, 2, 1)
     plt.plot(history['train_loss'], label='Train Loss')
     plt.plot(history['val_loss'], label='Validation Loss')
@@ -237,6 +197,7 @@ def plot_history(history):
     plt.title('Loss vs. Epoch')
     plt.legend()
 
+    # Plot validation accuracy
     plt.subplot(1, 2, 2)
     plt.plot(history['val_accuracy'], label='Validation Accuracy')
     plt.xlabel('Epoch')
@@ -244,85 +205,65 @@ def plot_history(history):
     plt.title('Validation Accuracy vs. Epoch')
     plt.legend()
 
-    # plt.show() # Comment out plt.show() if running in an environment where it blocks execution
-
-# --- Evaluate on Test Set ---
+# --- Evaluate Final Model on Test Set ---
 def evaluate_model(model, dataloader, class_names, device):
-    model.eval() # Set model to evaluate mode
-
-    running_corrects = 0
-    total_samples = 0
+    model.eval()
     all_preds = []
     all_labels = []
+    running_corrects = 0
+    total_samples = 0
 
     print("Evaluating model on test set...")
-    with torch.no_grad(): # No gradient calculation needed
+    with torch.no_grad():
         for inputs, labels in dataloader:
             inputs = inputs.to(device)
             labels = labels.to(device)
-
             outputs = model(inputs)
             _, preds = torch.max(outputs, 1)
 
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
-
             running_corrects += torch.sum(preds == labels.data)
             total_samples += inputs.size(0)
 
     test_acc = running_corrects.double() / total_samples
     print(f'Test Accuracy: {test_acc:.4f}')
 
-    # Generate Confusion Matrix
+    # Confusion matrix
     cm = confusion_matrix(all_labels, all_preds)
     plt.figure(figsize=(8, 6))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=class_names, yticklabels=class_names)
     plt.xlabel('Predicted Label')
     plt.ylabel('True Label')
     plt.title('Confusion Matrix (Test Set)')
-    # plt.show() # Comment out plt.show() if running in an environment where it blocks execution
 
-    # Generate Classification Report
+    # Detailed report
     report = classification_report(all_labels, all_preds, target_names=class_names)
     print("\nClassification Report (Test Set):\n")
     print(report)
 
-
-# --- Main Execution Block ---
-# This ensures the code inside only runs when the script is executed directly
+# --- Main Script ---
 if __name__ == '__main__':
-    # Added freeze_support() for better compatibility on Windows when freezing (optional but good practice)
-    # from multiprocessing import freeze_support
-    # freeze_support()
-
+    # Load data and set up model
     dataloaders, class_names, class_weights, NUM_CLASSES = load_data(DATA_DIR, train_transforms, val_test_transforms, BATCH_SIZE, NUM_WORKERS, NUM_CLASSES)
-
     model = setup_model(NUM_CLASSES, device)
 
-    # --- Loss Function, Optimizer, Scheduler ---
-    # Use CrossEntropyLoss with class weights calculated earlier to handle imbalance
+    # Define loss function with class weights and optimizer
     criterion = nn.CrossEntropyLoss(weight=class_weights.to(device))
-
-    # Observe that only parameters of final layer are being optimized as
-    # opoosed to before.
     optimizer = optim.Adam(model.fc.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
-
-    # Reduce learning rate when validation loss has stopped improving
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=5, verbose=True)
 
-
-    # --- Start Training ---
+    # Train model
     print("Starting model training...")
     model_ft, history = train_model(model, criterion, optimizer, scheduler, dataloaders, NUM_EPOCHS, PATIENCE, MODEL_SAVE_PATH, device)
 
-    # --- Plot Training History ---
+    # Plot training curves
     print("Plotting training history...")
     plot_history(history)
-    plt.show() # Show plots here after training is done
+    plt.show()
 
-    # --- Evaluate on Test Set ---
+    # Evaluate model on test set
     evaluate_model(model_ft, dataloaders['test'], class_names, device)
-    plt.show() # Show confusion matrix plot here
+    plt.show()
 
     print("\nTraining and evaluation complete.")
-
