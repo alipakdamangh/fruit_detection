@@ -46,3 +46,9 @@ an video output through a static ip address*
 
 11.download arduino ide, selet the board and the port in the ide and upload the arduino board script 
 *change the port in the code if its different*
+
+12.The empty folders dataset, figures, yolov8_models are placeholders for their 
+own repective data as mentioned bellow: 
+- dataset folder should contain these folders: train, test, val *you can ignore test and only use val*
+- figures folder will contain the drawn matric and metrics after the model_training.py sceript is executed
+- yolov8_models folder should contain the files for the downloded yolov8 models (n,s,m,l, ...)

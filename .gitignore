@@ -1,5 +1,19 @@
-.venv/
-dataset/
-yolov8_models/
+# Ignore everything inside dataset folder
+dataset/*
 
+# But do not ignore .gitkeep inside dataset
+!dataset/.gitkeep
+
+# Ignore everything inside yolov8_models except .gitkeep
+yolov8_models/*
+!yolov8_models/.gitkeep
+
+# Ignore everything inside figures except .gitkeep
+figures/*
+!figures/.gitkeep
+
+# Ignore virtual environment folder entirely
+.venv/
+
+# Ignore best model file
 best_model.pth

@@ -1,7 +1,5 @@
 import cv2
-import numpy as np
 from ultralytics import YOLO
-import time
 
 IP_CAMERA_URL = 'http://192.168.1.128:8080/video'
 YOLO_MODEL_NAME = '../yolov8_models/yolov8l.pt'

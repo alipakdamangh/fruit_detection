@@ -107,7 +107,10 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, num_epochs,
     for epoch in range(num_epochs):
         print(f'Epoch {epoch}/{num_epochs - 1}\n' + '-' * 10)
         for phase in ['train', 'val']:
-            model.train() if phase == 'train' else model.eval()
+            if phase == 'train':
+                model.train()
+            else:
+                model.eval()
             running_loss = 0.0
             running_corrects = 0
             total_samples_phase = 0
@@ -155,7 +158,9 @@ def train_model(model, criterion, optimizer, scheduler, dataloaders, num_epochs,
     model.load_state_dict(best_model_wts)
     return model, history
 
-def plot_history(history):
+def plot_history(history, save_dir='figures'):
+    os.makedirs(save_dir, exist_ok=True)
+
     plt.figure(figsize=(12, 4))
     plt.subplot(1, 2, 1)
     plt.plot(history['train_loss'], label='Train Loss')
@@ -172,7 +177,13 @@ def plot_history(history):
     plt.title('Validation Accuracy vs. Epoch')
     plt.legend()
 
-def evaluate_model(model, dataloader, class_names, device):
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, 'training_history.png'))
+    plt.close()
+
+def evaluate_model(model, dataloader, class_names, device, save_dir='figures'):
+    os.makedirs(save_dir, exist_ok=True)
+
     model.eval()
     all_preds = []
     all_labels = []
@@ -198,6 +209,9 @@ def evaluate_model(model, dataloader, class_names, device):
     plt.xlabel('Predicted Label')
     plt.ylabel('True Label')
     plt.title('Confusion Matrix (Test Set)')
+    plt.savefig(os.path.join(save_dir, 'confusion_matrix.png'))
+    plt.close()
+
     report = classification_report(all_labels, all_preds, target_names=class_names)
     print("\nClassification Report (Test Set):\n")
     print(report)
@@ -212,7 +226,6 @@ if __name__ == '__main__':
     model_ft, history = train_model(model, criterion, optimizer, scheduler, dataloaders, NUM_EPOCHS, PATIENCE, MODEL_SAVE_PATH, device)
     print("Plotting training history...")
     plot_history(history)
-    plt.show()
+    print("Evaluating model and saving confusion matrix...")
     evaluate_model(model_ft, dataloaders['test'], class_names, device)
-    plt.show()
     print("\nTraining and evaluation complete.")
